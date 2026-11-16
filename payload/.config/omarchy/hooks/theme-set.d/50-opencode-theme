@@ -1,0 +1,11 @@
+#!/bin/bash
+# Regenerate the OpenCode TUI theme (~/.config/opencode/themes/omarchy.json)
+# from the active Omarchy palette. Installed with:
+#   omarchy hook install theme-set 50-opencode-theme
+set -u
+
+GEN="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/theme-gen.py"
+[[ -f $GEN ]] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+python3 "$GEN"

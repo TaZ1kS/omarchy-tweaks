@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+"""Auto-rotate the internal display on Lenovo Yoga convertibles (Hyprland).
+
+The accelerometer is read directly from sysfs, so no extra packages (and no
+root) are required. Rotation is only applied while the firmware reports
+"tablet mode"; Hyprland switch binds call `yoga-autorotate tablet on|off`.
+
+Usage:
+    yoga-autorotate daemon          run the rotation loop (autostarted)
+    yoga-autorotate tablet on|off   record tablet-mode state (switch binds)
+    yoga-autorotate apply <0-3>     force a transform now
+    yoga-autorotate status          show current state
+    yoga-autorotate debug           dump raw accelerometer values
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+APP = "yoga-autorotate"
+OUTPUT = os.environ.get("YOGA_AUTOROTATE_OUTPUT", "eDP-1")
+
+STATE_DIR = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local/state")) / APP
+TABLET_FILE = STATE_DIR / "tablet"
+PID_FILE = STATE_DIR / "daemon.pid"
+LOG_FILE = STATE_DIR / "daemon.log"
+
+POLL_SECONDS = 0.25
+STABLE_SECONDS = 0.6   # reading must hold this long before rotating
+TILT_THRESHOLD = 2.5   # m/s^2 on x/y before an axis counts as "down"
+FLAT_THRESHOLD = 8.0   # m/s^2 on z => lying flat, keep current rotation
+
+TRANSFORM_NAMES = {0: "normal", 1: "left-up", 2: "bottom-up", 3: "right-up"}
+
+
+def ensure_state_dir() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def log(message: str) -> None:
+    ensure_state_dir()
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    with LOG_FILE.open("a") as fh:
+        fh.write(f"{stamp} {message}\n")
+
+
+def hyprctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["hyprctl", *args], capture_output=True, text=True, timeout=10
+    )
+
+
+# --------------------------------------------------------------------------
+# accelerometer
+
+
+def find_accel() -> Path | None:
+    base = Path("/sys/bus/iio/devices")
+    fallback = None
+    for dev in sorted(base.glob("iio:device*")):
+        name_file = dev / "name"
+        try:
+            name = name_file.read_text().strip()
+        except OSError:
+            continue
+        if name == "accel_3d":
+            return dev
+        if fallback is None and "accel" in name and (dev / "in_accel_x_raw").exists():
+            fallback = dev
+    return fallback
+
+
+def read_accel(dev: Path) -> tuple[float, float, float]:
+    def value(axis: str) -> float:
+        raw = float((dev / f"in_accel_{axis}_raw").read_text().strip())
+        try:
+            scale = float((dev / f"in_accel_{axis}_scale").read_text().strip())
+        except OSError:
+            scale = float((dev / "in_accel_scale").read_text().strip())
+        return raw * scale
+
+    return value("x"), value("y"), value("z")
+
+
+def orientation(x: float, y: float, z: float) -> int | None:
+    """Map gravity to a Hyprland transform, or None when there is no answer."""
+    if abs(z) >= FLAT_THRESHOLD:
+        return None  # lying flat on a table: keep whatever we have
+    if abs(x) >= abs(y):
+        if abs(x) < TILT_THRESHOLD:
+            return None
+        return 1 if x > 0 else 3  # left-up / right-up
+    if abs(y) < TILT_THRESHOLD:
+        return None
+    return 2 if y > 0 else 0  # bottom-up / normal
+
+
+# --------------------------------------------------------------------------
+# tablet-mode state written by the Hyprland switch binds
+
+
+def read_tablet() -> bool:
+    try:
+        return TABLET_FILE.read_text().strip() == "1"
+    except FileNotFoundError:
+        return False
+
+
+def write_tablet(on: bool) -> None:
+    ensure_state_dir()
+    TABLET_FILE.write_text("1" if on else "0")
+
+
+# --------------------------------------------------------------------------
+# Hyprland
+
+
+def monitor_info() -> dict | None:
+    try:
+        result = hyprctl("monitors", "-j")
+        monitors = json.loads(result.stdout)
+    except (subprocess.SubprocessError, json.JSONDecodeError, OSError):
+        return None
+    for monitor in monitors:
+        if monitor.get("name") == OUTPUT:
+            return monitor
+    return None
+
+
+def apply_transform(transform: int) -> bool:
+    monitor = monitor_info()
+    if not monitor:
+        log(f"monitor {OUTPUT} not found, cannot apply transform {transform}")
+        return False
+
+    mode = "{width}x{height}@{refresh:.2f}".format(
+        width=monitor["width"],
+        height=monitor["height"],
+        refresh=float(monitor["refreshRate"]),
+    )
+    position = f'{monitor["x"]}x{monitor["y"]}'
+    scale = monitor["scale"]
+
+    code = (
+        f'hl.monitor({{ output = "{OUTPUT}", mode = "{mode}", '
+        f'position = "{position}", scale = {scale}, transform = {transform} }})\n'
+        f'hl.config({{ input = {{ touchdevice = {{ transform = {transform} }}, '
+        f'tablet = {{ transform = {transform} }} }} }})'
+    )
+    result = hyprctl("eval", code)
+    if result.returncode != 0:
+        log(f"failed to apply transform {transform}: {result.stderr.strip()}")
+        return False
+    return True
+
+
+# --------------------------------------------------------------------------
+# commands
+
+
+def daemon_already_running() -> int | None:
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+    cmdline_file = Path(f"/proc/{pid}/cmdline")
+    try:
+        cmdline = cmdline_file.read_bytes().replace(b"\0", b" ").decode()
+    except OSError:
+        return None
+    if APP in cmdline and "daemon" in cmdline:
+        return pid
+    return None
+
+
+def cmd_daemon() -> int:
+    ensure_state_dir()
+    running = daemon_already_running()
+    if running and running != os.getpid():
+        # A restart (e.g. after a compositor reload) should take over cleanly.
+        try:
+            os.kill(running, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        for _ in range(20):
+            if not daemon_already_running():
+                break
+            time.sleep(0.1)
+    PID_FILE.write_text(str(os.getpid()))
+    # Hyprland does not replay the current switch state at startup, so assume
+    # laptop mode until the hinge actually reports a change.
+    write_tablet(False)
+    log("daemon started")
+
+    def stop(signum, _frame):
+        log(f"daemon stopped (signal {signum})")
+        try:
+            PID_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
+
+    accel = find_accel()
+    if not accel:
+        log("no accelerometer found")
+        return 1
+
+    stable: int | None = None
+    candidate: int | None = None
+    candidate_since = 0.0
+    applied: int | None = None
+    ticks = 0
+
+    while True:
+        try:
+            x, y, z = read_accel(accel)
+        except OSError:
+            log("lost accelerometer, re-scanning")
+            time.sleep(1.0)
+            accel = find_accel()
+            if not accel:
+                return 1
+            continue
+
+        current = orientation(x, y, z)
+        now = time.monotonic()
+        if current is not None:
+            if current != candidate:
+                candidate = current
+                candidate_since = now
+            elif now - candidate_since >= STABLE_SECONDS:
+                stable = current
+        else:
+            candidate = None
+
+        desired = stable if read_tablet() else 0
+        if desired is None:
+            desired = 0
+
+        if desired != applied:
+            if apply_transform(desired):
+                if applied != desired:
+                    log(
+                        f"transform {desired} ({TRANSFORM_NAMES.get(desired, '?')})"
+                        f" tablet={read_tablet()}"
+                    )
+                applied = desired
+                ticks = 0
+
+        # Re-apply after a Hyprland reload, an external change, or a missed event.
+        ticks += 1
+        if ticks >= 4:
+            ticks = 0
+            monitor = monitor_info()
+            if monitor and monitor.get("transform") != desired:
+                log(f"transform drifted to {monitor.get('transform')}, re-applying {desired}")
+                if apply_transform(desired):
+                    applied = desired
+
+        time.sleep(POLL_SECONDS)
+
+
+def cmd_tablet(value: str) -> int:
+    if value not in ("on", "off"):
+        print("usage: yoga-autorotate tablet on|off", file=sys.stderr)
+        return 2
+    write_tablet(value == "on")
+    return 0
+
+
+def cmd_apply(value: str) -> int:
+    try:
+        transform = int(value)
+    except ValueError:
+        print("usage: yoga-autorotate apply 0|1|2|3", file=sys.stderr)
+        return 2
+    if transform not in TRANSFORM_NAMES:
+        print("usage: yoga-autorotate apply 0|1|2|3", file=sys.stderr)
+        return 2
+    return 0 if apply_transform(transform) else 1
+
+
+def cmd_status() -> int:
+    accel = find_accel()
+    tablet = read_tablet()
+    monitor = monitor_info()
+    print(f"tablet mode : {'on' if tablet else 'off'}")
+    print(f"monitor     : {OUTPUT}")
+    if monitor:
+        print(
+            "transform   : {} ({})".format(
+                monitor.get("transform"),
+                TRANSFORM_NAMES.get(monitor.get("transform"), "?"),
+            )
+        )
+    else:
+        print("transform   : monitor not found")
+    if accel:
+        try:
+            x, y, z = read_accel(accel)
+            o = orientation(x, y, z)
+            print(f"accel       : x={x:6.2f} y={y:6.2f} z={z:6.2f} m/s²")
+            print(
+                "orientation : {}".format(
+                    "flat/unknown" if o is None else f"{o} ({TRANSFORM_NAMES[o]})"
+                )
+            )
+        except OSError:
+            print("accel       : unreadable")
+    else:
+        print("accel       : not found")
+    pid = daemon_already_running()
+    print(f"daemon      : {'running (pid %d)' % pid if pid else 'stopped'}")
+    return 0
+
+
+def cmd_debug() -> int:
+    accel = find_accel()
+    if not accel:
+        print("no accelerometer found", file=sys.stderr)
+        return 1
+    print(f"accelerometer: {accel}")
+    print("Ctrl+C to stop")
+    try:
+        while True:
+            x, y, z = read_accel(accel)
+            o = orientation(x, y, z)
+            print(
+                f"x={x:7.2f} y={y:7.2f} z={z:7.2f}  "
+                f"{'flat/unknown' if o is None else TRANSFORM_NAMES[o]}"
+            )
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print(__doc__)
+        return 2
+    command = argv[1]
+    if command == "daemon":
+        return cmd_daemon()
+    if command == "tablet":
+        return cmd_tablet(argv[2] if len(argv) > 2 else "")
+    if command == "apply":
+        return cmd_apply(argv[2] if len(argv) > 2 else "")
+    if command == "status":
+        return cmd_status()
+    if command == "debug":
+        return cmd_debug()
+    print(f"unknown command: {command}", file=sys.stderr)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except Exception as exc:  # keep the autostarted daemon's failures visible
+        log(f"fatal: {exc!r}")
+        raise

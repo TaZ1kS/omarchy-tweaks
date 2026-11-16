@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "id": "local.system-monitor",
+  "name": "System monitor",
+  "version": "1.1.0",
+  "author": "matviy",
+  "description": "Live CPU, memory, temperature, disk and network monitor with a btop shortcut",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Main.qml"
+  },
+  "barWidget": {
+    "displayName": "System monitor",
+    "description": "Live CPU, memory, temperature, disk and network monitor with a btop shortcut",
+    "category": "System",
+    "allowMultiple": true,
+    "defaultSection": "right",
+    "defaults": {
+      "metric": "cpu",
+      "barMetrics": [
+        "cpu",
+        "memory",
+        "temperature"
+      ],
+      "interval": 250,
+      "showMemory": true,
+      "showSwap": true,
+      "showGpu": true,
+      "showDisk": true,
+      "showTopProcesses": true,
+      "showTemperature": true,
+      "showNetwork": true,
+      "showUptime": true,
+      "showLoad": true
+    },
+    "schema": [
+      {
+        "key": "metric",
+        "type": "select",
+        "label": "Bar metric",
+        "description": "Legacy single metric (used when barMetrics is unset).",
+        "defaultValue": "cpu",
+        "options": [
+          {
+            "value": "cpu",
+            "label": "CPU"
+          },
+          {
+            "value": "memory",
+            "label": "Memory"
+          },
+          {
+            "value": "temperature",
+            "label": "Temperature"
+          },
+          {
+            "value": "gpu",
+            "label": "GPU"
+          },
+          {
+            "value": "disk",
+            "label": "Disk"
+          },
+          {
+            "value": "network",
+            "label": "Network"
+          }
+        ]
+      },
+      {
+        "key": "interval",
+        "type": "integer",
+        "label": "Refresh interval (ms)",
+        "description": "Resource refresh interval. Minimum 250 ms; process list updates every 2 seconds.",
+        "defaultValue": 250
+      }
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+# Machine-level Omarchy shell token overrides.
+# Layered on top of the active theme's shell.toml (user keys win), watched
+# live by the shell. Only the keys listed here are overridden; everything else
+# keeps coming from the theme.
+
+# Bar flyouts (panels, OSD, popup cards). Semi-transparent cards so the
+# compositor can blur the wallpaper/desktop behind them.
+[popups]
+background-alpha = 0.35
+
+# Keep slider notches/knob rims in step with the translucent panel instead of
+# painting them with an opaque theme background.
+[bar]
+background-alpha = 0.35
+
+[tooltip]
+background-alpha = 0.35
+
+[notifications]
+background-alpha = 0.35
+
+# Frosted cards; fullscreen dismiss areas stay transparent.
+[menu]
+scrim-alpha = 0.0
+background-alpha = 0.35
+
+[launcher]
+scrim-alpha = 0.0
+background-alpha = 0.35
+
+[font]
+base-size = 11
+
+[polkit]
+scrim-alpha = 0.0
+background-alpha = 0.35

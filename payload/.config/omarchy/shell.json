@@ -1,0 +1,106 @@
+{
+  "bar": {
+    "background": "glassy",
+    "layout": {
+      "center": [
+        {
+          "format": "dddd HH:mm",
+          "formatAlt": "d MMMM 'W'ww yyyy",
+          "id": "omarchy.clock",
+          "verticalFormat": "HH\n\u2014\nmm"
+        }
+      ],
+      "centerBegin": [
+        {
+          "id": "omarchy.indicators"
+        },
+        {
+          "id": "omarchy.weather"
+        }
+      ],
+      "centerEnd": [
+        {
+          "cities": [
+            {
+              "name": "Kyiv",
+              "zone": "Europe/Kyiv"
+            },
+            {
+              "name": "Prague",
+              "zone": "Europe/Prague"
+            }
+          ],
+          "id": "omarchy.elsewhen"
+        },
+        {
+          "id": "omarchy.system-update"
+        }
+      ],
+      "left": [
+        {
+          "id": "omarchy.menu"
+        },
+        {
+          "id": "omarchy.workspaces"
+        },
+        {
+          "barMetrics": [
+            "cpu",
+            "memory",
+            "temperature"
+          ],
+          "id": "local.system-monitor",
+          "interval": 250,
+          "metric": "memory",
+          "showGpu": true,
+          "showMemory": true,
+          "showSwap": true
+        }
+      ],
+      "right": [
+        {
+          "id": "omarchy.tray"
+        },
+        {
+          "id": "omarchy.keyboard-layout"
+        },
+        {
+          "id": "omarchy.agents"
+        },
+        {
+          "id": "omarchy.audio"
+        },
+        {
+          "id": "omarchy.bluetooth"
+        },
+        {
+          "id": "omarchy.network"
+        },
+        {
+          "id": "omarchy.monitor"
+        },
+        {
+          "id": "omarchy.power"
+        }
+      ],
+      "tray": []
+    },
+    "position": "top"
+  },
+  "cloneSourceRestores": [
+    "matviy.osd"
+  ],
+  "disabledPlugins": [
+    "omarchy.osd"
+  ],
+  "idle": {
+    "lock": 300,
+    "screensaver": 150
+  },
+  "plugins": [
+    {
+      "id": "matviy.osd"
+    }
+  ],
+  "version": 1
+}

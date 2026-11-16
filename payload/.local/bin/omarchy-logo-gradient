@@ -1,0 +1,16 @@
+#!/bin/bash
+# Render Omarchy logo with an orange gradient
+file="$HOME/.config/omarchy/branding/about.txt"
+# Read lines into array
+mapfile -t lines < "$file"
+n=${#lines[@]}
+for i in "${!lines[@]}"; do
+  # gradient factor 0..1
+  # Use awk for float
+  frac=$(awk -v i="$i" -v n="$n" 'BEGIN{printf "%.3f", i/(n-1)}')
+  # orange gradient: dark (200,80,0) -> bright (255,180,80)
+  r=$(awk -v f="$frac" 'BEGIN{printf "%d", 200 + (255-200)*f}')
+  g=$(awk -v f="$frac" 'BEGIN{printf "%d", 80 + (180-80)*f}')
+  b=$(awk -v f="$frac" 'BEGIN{printf "%d", 0 + (80-0)*f}')
+  printf '\033[38;2;%d;%d;%dm%s\033[0m\n' "$r" "$g" "$b" "${lines[$i]}"
+done

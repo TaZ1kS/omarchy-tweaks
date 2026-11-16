@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# phone-screen — телефон як додатковий екран (Headless-VNC).
+#
+# Створює wayvnc сервер на фіксованому віртуальному виводі HEADLESS-1.
+# Екран: 1200x540, по центру під центральним монітором.
+# wayvnc передає абсолютні координати — «тапнув — клікнулось там».
+#
+# Ключі:
+#   phone-screen on      — піднімати wayvnc на HEADLESS-1, adb reverse
+#   phone-screen off     — зупиняти
+#   phone-screen toggle  — перемикати
+#   phone-screen ensure  — лише створити/налаштувати HEADLESS-1 (без wayvnc)
+#   phone-screen status  — що зараз
+#   phone-screen tether  — IP ноутбука по USB-терингу (для Moonlight)
+#   phone-screen tweaks  — KSU-твіки на телефоні (root adb)
+#
+# Залежності: wayvnc, android-tools (adb), jq, Hyprland.
+
+set -uo pipefail
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'phone-screen: %s\n' "$*" >&2; exit 1; }
+popup() {
+  local msg="$1"
+  omarchy-osd -i "display" -m "$msg" &
+}
+
+# Фіксована назва виводу та розмір екрану.
+OUTPUT="HEADLESS-1"
+PHONE_W=1200
+PHONE_H=540
+PHONE_MODE="${PHONE_MODE:-${PHONE_W}x${PHONE_H}@60}"
+
+HOST="${PHONE_VNC_HOST:-0.0.0.0}"
+PORT="${PHONE_VNC_PORT:-5900}"
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}/phone-screen"
+PIDFILE="$RUNDIR/wayvnc.pid"
+LOGFILE="$RUNDIR/wayvnc.log"
+OUTPUT_FILE="$RUNDIR/output.name"
+
+vnc_pid() {
+  [[ -f $PIDFILE ]] || return 1
+  local pid
+  pid=$(<"$PIDFILE")
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf '%s' "$pid"
+}
+
+adb_ready() {
+  command -v adb >/dev/null || return 1
+  adb get-state 2>/dev/null | grep -qx device
+}
+
+# Чи існує вивід з фіксованою назвою.
+output_exists() {
+  hyprctl -j monitors all 2>/dev/null \
+    | jq -e --arg n "$OUTPUT" 'any(.[]; .name == $n)' >/dev/null 2>&1
+}
+
+# Прибирає всі HEADLESS-виводи, крім фіксованого (щоб назва не «пливла»).
+remove_stale_outputs() {
+  local h
+  for h in $(hyprctl -j monitors all 2>/dev/null \
+      | jq -r '.[].name | select(startswith("HEADLESS-"))' 2>/dev/null); do
+    [[ $h == "$OUTPUT" ]] || hyprctl output remove "$h" >/dev/null 2>&1
+  done
+}
+
+ensure_output() {
+  output_exists && return 0
+  hyprctl output create headless "$OUTPUT" >/dev/null 2>&1
+  sleep 0.5
+  output_exists || die "Не вдалось створити headless-вивід $OUTPUT"
+}
+
+# Друкує "XxY": телефон по центру під центральним монітором.
+# Центральний — той, що містить горизонтальний центр розкладки реальних
+# моніторів (HEADLESS-виводи ігноруються). PHONE_ANCHOR=<name> — примусово.
+center_position() {
+  local anchor="${PHONE_ANCHOR:-}" pos
+  pos=$(hyprctl -j monitors all 2>/dev/null | jq -r \
+      --arg anchor "$anchor" --argjson w "$PHONE_W" --argjson h "$PHONE_H" '
+      [ .[] | select(.name | startswith("HEADLESS-") | not) ] as $real
+      | if ($real | length) == 0 then empty
+        else
+          ( if $anchor != "" then ($real | map(select(.name == $anchor)) | first) else null end )
+          // ( ($real | map(.x) | min) as $minx
+               | ($real | map(.x + .width) | max) as $maxx
+               | (($minx + $maxx) / 2) as $cx
+               | ($real | map(select(.x <= $cx and (.x + .width) >= $cx)) | first) )
+          // ($real | max_by(.width))
+          | "\(.x + ((.width - $w) / 2 | floor))x\(.y + .height)"
+        end
+    ' 2>/dev/null)
+  [[ -n $pos ]] || pos="1520x1050"
+  printf '%s' "$pos"
+}
+
+# Гарантує HEADLESS-1 з потрібним розміром і позицією. Друкує позицію.
+configure_screen() {
+  remove_stale_outputs
+  ensure_output
+  local pos
+  pos=$(center_position)
+  hyprctl keyword monitor "$OUTPUT,${PHONE_MODE},${pos},1" >/dev/null 2>&1
+  printf '%s' "$pos"
+}
+
+start() {
+  local pid
+  if pid=$(vnc_pid); then
+    local out
+    out=$(cat "$OUTPUT_FILE" 2>/dev/null)
+    [[ -n $out ]] || out="$OUTPUT"
+    say "VNC already running (pid $pid) on $HOST:$PORT, screen $out"
+    popup "Увімкнено"
+    return 0
+  fi
+
+  [[ -n $(hyprctl monitors 2>/dev/null) ]] || die "Hyprland недоступний"
+
+  local pos
+  pos=$(configure_screen)
+  say "Screen: $OUTPUT ${PHONE_W}x${PHONE_H} at $pos (centered under central monitor)"
+
+  mkdir -p "$RUNDIR"
+  printf '%s' "$OUTPUT" > "$OUTPUT_FILE"
+
+  nohup wayvnc -o "$OUTPUT" -f 60 -k us -r "$HOST:$PORT" >"$LOGFILE" 2>&1 &
+  pid=$!
+  printf '%s' "$pid" >"$PIDFILE"
+
+  sleep 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    rm -f "$PIDFILE" "$OUTPUT_FILE"
+    say "wayvnc failed to start:"
+    tail -5 "$LOGFILE" >&2
+    popup "Помилка"
+    exit 1
+  fi
+
+  say "VNC: $OUTPUT → $HOST:$PORT (pid $pid, log $LOGFILE)"
+
+  local lan_ip
+  lan_ip=$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^192\.168\./ && $4 !~ /^192\.168\.42\./ {print $4}' | cut -d/ -f1 | head -1)
+  [[ -n $lan_ip ]] && say "LAN / Wi-Fi address: $lan_ip:$PORT"
+
+  if adb_ready; then
+    if adb reverse tcp:"$PORT" tcp:"$PORT" >/dev/null 2>&1; then
+      say "adb raised — connect phone to 127.0.0.1:$PORT"
+    else
+      say "adb present but reverse failed"
+    fi
+  else
+    say "Phone not visible via adb. Connect cable and enable debugging."
+  fi
+
+  popup "Увімкнено"
+}
+
+ensure() {
+  [[ -n $(hyprctl monitors 2>/dev/null) ]] || die "Hyprland недоступний"
+  local pos
+  pos=$(configure_screen)
+  say "Screen: $OUTPUT ${PHONE_W}x${PHONE_H} at $pos (centered under central monitor)"
+}
+
+stop() {
+  local pid
+  if pid=$(vnc_pid); then
+    kill "$pid" 2>/dev/null
+    for _ in 1 2 3 4 5; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+    kill -9 "$pid" 2>/dev/null
+    say "VNC stopped (pid $pid)"
+  else
+    say "VNC not running"
+  fi
+
+  rm -f "$PIDFILE"
+  adb reverse --remove tcp:"$PORT" >/dev/null 2>&1
+
+  # Прибираємо фіксований вивід і будь-які залишкові HEADLESS-виводи.
+  remove_stale_outputs
+  if output_exists; then
+    hyprctl output remove "$OUTPUT" >/dev/null 2>&1 && say "Output $OUTPUT removed"
+  fi
+  rm -f "$OUTPUT_FILE"
+  popup "Вимкнено"
+}
+
+status() {
+  local pid
+  if pid=$(vnc_pid); then
+    local out
+    out=$(cat "$OUTPUT_FILE" 2>/dev/null)
+    [[ -n $out ]] || out="$OUTPUT"
+    say "VNC: enabled (pid $pid) → $HOST:$PORT, screen $out"
+    local lan_ip
+    lan_ip=$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^192\.168\./ && $4 !~ /^192\.168\.42\./ {print $4}' | cut -d/ -f1 | head -1)
+    [[ -n $lan_ip ]] && say "LAN / Wi-Fi address: $lan_ip:$PORT"
+  else
+    say "VNC: disabled"
+  fi
+
+  if systemctl --user is-active --quiet app-dev.lizardbyte.app.Sunshine.service; then
+    say "Sunshine: enabled (web UI https://localhost:47990)"
+  else
+    say "Sunshine: disabled"
+  fi
+
+  if adb_ready; then
+    say "adb: device connected ($(adb shell getprop ro.product.model 2>/dev/null | tr -d '\r'))"
+    local rev
+    rev=$(adb reverse --list 2>/dev/null | tr -d '\r')
+    [[ -n $rev ]] && say "reverse:  ${rev//$'\n'/, }"
+  else
+    say "adb: device not visible"
+  fi
+
+  local iface ip
+  iface=$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^192\.168\.42\./ {print $2; exit}')
+  if [[ -n $iface ]]; then
+    ip=$(ip -o -4 addr show "$iface" | awk '{print $4}' | cut -d/ -f1)
+    say "USB tethering: $iface → $ip (Moonlight: add host $ip manually)"
+  else
+    say "USB tethering: not raised"
+  fi
+}
+
+tether() {
+  local iface ip
+  iface=$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^192\.168\.42\./ {print $2; exit}')
+  [[ -n $iface ]] || die "USB tethering not raised. Enable USB modem/tethering on phone."
+  ip=$(ip -o -4 addr show "$iface" | awk '{print $4}' | cut -d/ -f1)
+  say "Interface: $iface"
+  say "Moonlight address: $ip"
+  say "Ports open in ufw only for 192.168.42.0/24."
+}
+
+tweaks() {
+  adb_ready || die "phone not visible via adb"
+  say "Applying tweaks (requires KSU/Magisk root adb)..."
+  adb shell su -c '
+    settings put system peak_refresh_rate 120
+    settings put system min_refresh_rate 120
+    svc power stayon true
+    dumpsys deviceidle disable
+  ' >/dev/null 2>&1 && say "done: 120 Hz, screen stays on, doze disabled" \
+    || die "failed — check that 'su' on phone grants adb access"
+}
+
+case "${1:-status}" in
+  on|start)   start ;;
+  off|stop)   stop ;;
+  toggle)     if vnc_pid >/dev/null; then stop; else start; fi ;;
+  ensure)     ensure ;;
+  status)     status ;;
+  tether)     tether ;;
+  tweaks)     tweaks ;;
+  *)          say "usage: phone-screen {on|off|toggle|ensure|status|tether|tweaks}"; exit 2 ;;
+esac

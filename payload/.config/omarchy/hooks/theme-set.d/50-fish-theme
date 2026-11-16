@@ -1,0 +1,93 @@
+#!/bin/bash
+# Regenerate ~/.config/fish/theme.fish from the active Omarchy theme palette.
+# Installed with: omarchy hook install theme-set 50-fish-theme
+# $1 is the theme slug (unused, everything is read from the state dir).
+
+set -u
+
+CURRENT_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/current"
+COLORS_FILE="$CURRENT_DIR/theme/colors.toml"
+OUT="${XDG_CONFIG_HOME:-$HOME/.config}/fish/theme.fish"
+THEME="${1:-$(cat "$CURRENT_DIR/theme.name" 2>/dev/null)}"
+
+[[ -f $COLORS_FILE ]] || exit 0
+command -v omarchy-theme-color >/dev/null 2>&1 || exit 0
+
+declare -A C=()
+while IFS=$'\t' read -r key value; do
+  [[ $value == \#* ]] && C[$key]=${value#\#}
+done < <(omarchy-theme-color --file "$COLORS_FILE" --all)
+
+# First key that exists wins, so themes with a thin palette still work.
+col() {
+  local key
+  for key in "$@"; do
+    if [[ -n ${C[$key]:-} ]]; then
+      printf '%s' "${C[$key]}"
+      return
+    fi
+  done
+  printf '%s' "${C[foreground]:-e6d9db}"
+}
+
+# Hex -> 24-bit SGR parameters for LS_COLORS / EZA_COLORS.
+sgr() {
+  local h
+  h=$(col "$@")
+  printf '38;2;%d;%d;%d' "0x${h:0:2}" "0x${h:2:2}" "0x${h:4:2}"
+}
+
+ls_colors="di=$(sgr accent):ex=$(sgr bright_green green):fi=$(sgr foreground):ln=$(sgr cyan):pi=$(sgr yellow):so=$(sgr yellow):bd=$(sgr yellow):cd=$(sgr yellow):or=$(sgr bright_red red):mi=$(sgr red):su=$(sgr bright_magenta magenta):sg=$(sgr bright_magenta magenta):tw=$(sgr blue):ow=$(sgr blue):st=$(sgr blue)"
+for ext in tar tgz zip gz bz2 xz zst 7z rar; do
+  ls_colors+=":*.${ext}=$(sgr magenta)"
+done
+
+eza_colors="di=$(sgr accent):ex=$(sgr bright_green green):fi=$(sgr foreground):ln=$(sgr cyan):pi=$(sgr yellow):so=$(sgr yellow):bd=$(sgr yellow):cd=$(sgr yellow):or=$(sgr bright_red red):mi=$(sgr red):su=$(sgr bright_magenta magenta):sg=$(sgr bright_magenta magenta):tw=$(sgr blue):ow=$(sgr blue):st=$(sgr blue):ur=$(sgr blue):uw=$(sgr blue):ux=$(sgr blue):ue=$(sgr blue):gr=$(sgr muted):gw=$(sgr muted):gx=$(sgr muted):tr=$(sgr muted):tx=$(sgr muted):sn=$(sgr yellow):sb=$(sgr yellow):da=$(sgr cyan):in=$(sgr yellow):bl=$(sgr yellow):hd=$(sgr accent):lp=$(sgr cyan):cc=$(sgr bright_red red):oc=$(sgr bright_red red)"
+
+tmp=$(mktemp "${OUT}.XXXXXX")
+
+{
+  printf '# Generated from the Omarchy theme "%s". Do not edit.\n' "$THEME"
+  printf '# Source: ~/.config/omarchy/hooks/theme-set.d/50-fish-theme\n\n'
+
+  printf 'set -g fish_color_normal %s\n' "$(col foreground)"
+  printf 'set -g fish_color_command %s\n' "$(col accent)"
+  printf 'set -g fish_color_keyword %s\n' "$(col red)"
+  printf 'set -g fish_color_quote %s\n' "$(col yellow)"
+  printf 'set -g fish_color_redirection %s\n' "$(col orange accent)"
+  printf 'set -g fish_color_end %s\n' "$(col magenta)"
+  printf 'set -g fish_color_error %s\n' "$(col bright_red red)"
+  printf 'set -g fish_color_param %s\n' "$(col foreground)"
+  printf 'set -g fish_color_comment %s\n' "$(col muted)"
+  printf 'set -g fish_color_selection --background=%s\n' "$(col selection)"
+  printf 'set -g fish_color_search_match --background=%s\n' "$(col accent)"
+  printf 'set -g fish_color_operator %s\n' "$(col orange accent)"
+  printf 'set -g fish_color_escape %s\n' "$(col cyan)"
+  printf 'set -g fish_color_cwd %s\n' "$(col accent)"
+  printf 'set -g fish_color_cwd_root %s\n' "$(col red)"
+  printf 'set -g fish_color_user %s\n' "$(col accent)"
+  printf 'set -g fish_color_host %s\n' "$(col magenta)"
+  printf 'set -g fish_color_host_remote %s\n' "$(col bright_magenta magenta)"
+  printf 'set -g fish_color_status %s\n' "$(col red)"
+  printf 'set -g fish_color_cancel %s\n' "$(col red)"
+  printf 'set -g fish_color_autosuggestion %s\n' "$(col muted)"
+  printf 'set -g fish_pager_color_prefix %s\n' "$(col accent)"
+  printf 'set -g fish_pager_color_completion %s\n' "$(col foreground)"
+  printf 'set -g fish_pager_color_description %s\n' "$(col muted)"
+  printf 'set -g fish_pager_color_progress %s\n' "$(col accent)"
+  printf 'set -g fish_pager_color_selected_background --background=%s\n' "$(col selection)"
+  printf 'set -g fish_pager_color_selected_prefix %s\n' "$(col accent)"
+  printf 'set -g fish_pager_color_selected_completion %s\n' "$(col foreground)"
+  printf 'set -g fish_pager_color_selected_description %s\n' "$(col muted)"
+  printf '\nset -gx LS_COLORS "%s"\n' "$ls_colors"
+  printf 'set -gx EZA_COLORS "%s"\n' "$eza_colors"
+} >"$tmp"
+
+# Only replace the live file when something actually changed, so fish never
+# sources a half-written palette and the mtime stays put on no-op theme sets.
+if [[ -f $OUT ]] && cmp -s "$tmp" "$OUT"; then
+  rm -f "$tmp"
+  exit 0
+fi
+
+mv -f "$tmp" "$OUT"

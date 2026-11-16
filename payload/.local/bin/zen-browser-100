@@ -1,0 +1,4 @@
+#!/bin/sh
+# Launch Zen Browser with 100% scaling regardless of system GDK_SCALE
+export GDK_SCALE=1
+exec /opt/zen-browser-bin/zen-bin "$@"
