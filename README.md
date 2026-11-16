@@ -52,3 +52,13 @@ python3 install.py --restore ~/.local/state/omarchy-tweaks/backups/НАЗВА_К
 python3 install.py --target-home /tmp/omarchy-profile-test --dry-run
 python3 install.py --target-home /tmp/omarchy-profile-test
 ```
+
+## Публікація
+
+Локальний репозиторій підготовлений для `TaZ1kS/omarchy-tweaks`. Щоб опублікувати з термінала з доступом до GitHub:
+
+```bash
+./publish.sh
+```
+
+Потрібен `gh` з авторизацією (`gh auth login`). Скрипт створює публічний репозиторій або виконує звичайний push у вже наявний; force-push не використовується.
