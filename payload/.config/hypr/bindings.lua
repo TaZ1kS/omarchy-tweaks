@@ -177,3 +177,6 @@ end
 
 o.bind("mouse_right", "Next workspace (mouse thumb wheel)", thumb_wheel_bind(1))
 o.bind("mouse_left", "Previous workspace (mouse thumb wheel)", thumb_wheel_bind(-1))
+
+-- Launch Codex with sandbox and approval prompts disabled.
+o.bind("SUPER + CTRL + SHIFT + O", "Codex (full access)", "omarchy-launch-terminal bash -lc 'exec codex --dangerously-bypass-approvals-and-sandbox'")
