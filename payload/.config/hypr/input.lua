@@ -49,7 +49,8 @@
 hl.config({
   input = {
     kb_layout = "us,ua",
-    kb_options = "compose:caps,shift:both_capslock_cancel,grp:alt_shift_toggle",
+    -- Keep Caps Lock as Caps Lock; Alt+Shift switches keyboard layouts.
+    kb_options = "grp:alt_shift_toggle",
 
     touchpad = {
       natural_scroll = true,
