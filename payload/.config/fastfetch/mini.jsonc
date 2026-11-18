@@ -1,0 +1,18 @@
+{
+  "logo": {
+    "type": "data",
+    "source": "$1   ⣸⣇\n  ⢠⣿⣿⡄\n ⢠⣿⠟⠻⣿⡄\n⣴⠟⠁  ⠈⠻⣦",
+    "color": {"1": "#68adff"},
+    "padding": {"left": 1, "right": 3}
+  },
+  "display": {
+    "color": {"keys": "#68adff", "output": "#b3d6ff", "separator": "#508ff0"},
+    "percent": {"type": 1}
+  },
+  "modules": [
+    {"type": "packages", "key": " Packages", "format": "{all}"},
+    {"type": "command", "key": " OS Age", "text": "echo $(( ($(date +%s) - $(stat -c %W /)) / 86400 )) days"},
+    {"type": "command", "key": " CPU", "text": "awk '/^cpu MHz/ {sum += $4; n++} END {if (n) printf \"%.2f GHz\", sum/n/1000; else print \"—\"}' /proc/cpuinfo"},
+    {"type": "uptime", "key": " Up", "format": "{?days}{days}d {?}{?hours}{hours}h {?}{minutes}m"}
+  ]
+}

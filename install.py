@@ -8,6 +8,9 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from accents import CODEX_CONFIG, CODEX_THEME, MINI_CONFIG, MINI_PANEL, PALETTES
+from accents import choose_accent, codex_config, render_accent
+
 ROOT = Path(__file__).resolve().parent
 
 def main():
@@ -16,6 +19,7 @@ def main():
     parser.add_argument('--hardware', action='store_true', help='Also install the original physical monitor layout and Sunshine unit')
     parser.add_argument('--target-home', type=Path, default=Path.home(), help='Alternative home directory, e.g. for testing')
     parser.add_argument('--restore', type=Path, help='Restore a backup created by this installer')
+    parser.add_argument('--accent', choices=PALETTES, help='Accent for Fastfetch and Codex CLI (default: teal)')
     args = parser.parse_args()
     target = args.target_home.expanduser().resolve()
     if args.restore:
@@ -49,6 +53,7 @@ def main():
     monitor = Path('.config/hypr/monitors.lua')
     if monitor not in files and not (target / monitor).exists():
         files[monitor] = ROOT / 'portable-monitors.lua'
+    files[CODEX_CONFIG] = None
     # Check all destinations before changing anything; reject links into another tree.
     for rel in files:
         dest = target / rel
@@ -56,6 +61,17 @@ def main():
             parser.error(f'Destination escapes target home: {rel}')
         if dest.exists() and dest.is_dir():
             parser.error(f'Destination is a directory: {rel}')
+    accent = args.accent or (None if args.dry_run else choose_accent()) or 'teal'
+    print(f'Accent: {accent}')
+    rendered = {
+        rel: render_accent(rel, files[rel].read_text(), accent)
+        for rel in (MINI_CONFIG, MINI_PANEL, CODEX_THEME)
+    }
+    config = target / CODEX_CONFIG
+    try:
+        rendered[CODEX_CONFIG] = codex_config(config.read_text() if config.exists() else '')
+    except ValueError as error:
+        parser.error(f'{CODEX_CONFIG}: {error}')
     stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
     backup = target / '.local/state/omarchy-tweaks/backups' / stamp
     manifest = {'home': str(target), 'files': []}
@@ -76,7 +92,12 @@ def main():
         dest.parent.mkdir(parents=True, exist_ok=True)
         if dest.is_symlink():
             dest.unlink()
-        shutil.copy2(source, dest)
+        if rel in rendered:
+            dest.write_text(rendered[rel])
+            if rel == CODEX_CONFIG:
+                dest.chmod(0o600)
+        else:
+            shutil.copy2(source, dest)
     if args.dry_run:
         print('Dry run: no files changed.')
         return

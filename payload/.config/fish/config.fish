@@ -1,6 +1,4 @@
 if status is-interactive
-    # Remove greeting
-    set -g fish_greeting ""
 
     # Colours come from the active Omarchy theme. The palette file is
     # regenerated on every theme change by
